@@ -8,7 +8,7 @@ import { analyzeVideoFile, analyzeVideoUrl, optimizeScriptWithAI } from './servi
 import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb } from './services/firebaseService';
 import { auth } from './firebaseConfig';
 import firebase from 'firebase/compat/app'; // Updated to compat import
-import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer } from 'lucide-react';
+import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer, WifiOff } from 'lucide-react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<firebase.User | null>(null);
@@ -19,6 +19,7 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
   const [notification, setNotification] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
   const [processingState, setProcessingState] = useState<{current: number, total: number} | undefined>(undefined);
+  const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState(false);
   
   // Timer logic
@@ -55,15 +56,19 @@ const App: React.FC = () => {
         setLoadingAuth(false);
         return;
     }
-    // Using namespaced onAuthStateChanged
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-        setUser(currentUser);
+        // Chỉ update nếu không phải là guest user giả mạo đang đăng nhập
+        if (currentUser) {
+           setUser(currentUser);
+        } else if (user?.uid !== 'guest') {
+           setUser(null);
+        }
         setLoadingAuth(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, []); // Remove user dependency to avoid loop
 
-  // Load scripts when user logs in (Real Firestore Fetch)
+  // Load scripts
   useEffect(() => {
     if (user) {
         const loadScripts = async () => {
@@ -73,7 +78,7 @@ const App: React.FC = () => {
                 setSavedScripts(scripts);
             } catch (error) {
                 console.error("Failed to load scripts", error);
-                showNotification("Lỗi tải dữ liệu từ Cloud.", 'error');
+                // Không hiển thị lỗi quá gắt, chỉ log
             } finally {
                 setIsSyncing(false);
             }
@@ -86,10 +91,31 @@ const App: React.FC = () => {
   }, [user]);
 
   const handleLogout = async () => {
+      if (user?.uid === 'guest') {
+          setUser(null);
+          showNotification("Đã thoát chế độ khách.", 'success');
+          return;
+      }
       if (auth) {
         await auth.signOut();
         showNotification("Đã đăng xuất.", 'success');
       }
+  };
+
+  const handleGuestLogin = () => {
+      // Create a fake user object for Guest
+      const guestUser = {
+          uid: 'guest',
+          displayName: 'Khách (Guest)',
+          email: 'guest@local',
+          emailVerified: true,
+          isAnonymous: true,
+          photoURL: null,
+          providerData: []
+      } as unknown as firebase.User;
+      
+      setUser(guestUser);
+      showNotification("Đã vào Chế độ Khách (Lưu trữ trên máy).", 'success');
   };
 
   const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -97,11 +123,27 @@ const App: React.FC = () => {
       setTimeout(() => setNotification(null), 5000); 
   }
 
+  // --- HÀM LƯU DB RIÊNG BIỆT ---
+  const saveToCloudSafe = async (script: ScriptAnalysis) => {
+      try {
+          setLoadingMessage("Đang đồng bộ Cloud...");
+          await saveScriptToDb(script);
+          showNotification("Đã lưu thành công!", 'success');
+      } catch (dbError: any) {
+          console.error("FIREBASE SAVE ERROR:", dbError);
+          let msg = "Đã có kết quả nhưng LỖI LƯU CLOUD.";
+          if (dbError.code === 'permission-denied') msg += " (Thiếu quyền Firestore Rules)";
+          else if (dbError.code === 'unavailable') msg += " (Mất kết nối mạng)";
+          showNotification(msg, 'error');
+      }
+  };
+
   // BATCH PROCESSING LOGIC
   const handleFileSelect = async (files: File[]) => {
     if (files.length === 0 || !user) return;
 
     setStatus(AnalysisStatus.ANALYZING);
+    setLoadingMessage("Đang chuẩn bị...");
     setProcessingState({ current: 0, total: files.length });
     
     let successCount = 0;
@@ -112,10 +154,7 @@ const App: React.FC = () => {
         setProcessingState({ current: i + 1, total: files.length });
         
         try {
-            // Hiển thị thông báo đang xử lý file nào để người dùng biết app không bị treo
-            showNotification(`Đang đọc file ${i+1}/${files.length}: ${file.name}...`, 'success');
-            
-            const result = await analyzeVideoFile(file);
+            const result = await analyzeVideoFile(file, (msg) => setLoadingMessage(msg));
             
             const newScript: ScriptAnalysis = {
                 id: `script-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -127,38 +166,40 @@ const App: React.FC = () => {
                 scenes: result.scenes || []
             };
 
-            await saveScriptToDb(newScript);
-
-            setSavedScripts(prev => [newScript, ...prev]);
+            // 1. HIỂN THỊ NGAY LẬP TỨC (QUAN TRỌNG)
             setCurrentScript(newScript);
+            setSavedScripts(prev => [newScript, ...prev]);
             successCount++;
+
+            // 2. LƯU SAU (KHÔNG CHẶN HIỂN THỊ)
+            await saveToCloudSafe(newScript);
 
         } catch (error: any) {
             console.error(`Error processing file ${file.name}:`, error);
-            // Hiển thị lỗi cụ thể
-            showNotification(`Lỗi ${file.name}: ${error.message}`, 'error');
-            // Dừng lại 1 chút để người dùng kịp đọc lỗi trước khi qua file tiếp theo
+            showNotification(`Lỗi phân tích ${file.name}: ${error.message}`, 'error');
+            setLoadingMessage(`Lỗi: ${error.message}`);
             await new Promise(r => setTimeout(r, 2000));
         }
     }
 
     setProcessingState(undefined);
     setStatus(AnalysisStatus.COMPLETE);
+    setLoadingMessage('');
     
     if (successCount > 0) {
-        showNotification(`Đã hoàn thành ${successCount}/${files.length} video!`, 'success');
+        if(successCount === files.length) showNotification(`Hoàn tất phân tích!`, 'success');
     } else {
-        showNotification("Không thể xử lý video nào. Vui lòng kiểm tra lại file.", 'error');
+        showNotification("Không thể xử lý video nào.", 'error');
     }
   };
 
   const handleUrlSubmit = async (url: string) => {
     if (!user) return;
     setStatus(AnalysisStatus.ANALYZING);
-    showNotification("Đang tải và phân tích video từ URL...", 'success');
+    setLoadingMessage("Đang khởi tạo kết nối...");
     
     try {
-        const result = await analyzeVideoUrl(url);
+        const result = await analyzeVideoUrl(url, (msg) => setLoadingMessage(msg));
         
         const newScript: ScriptAnalysis = {
             id: `script-${Date.now()}`,
@@ -170,28 +211,29 @@ const App: React.FC = () => {
             scenes: result.scenes || []
         };
 
-        await saveScriptToDb(newScript);
-
+        // 1. HIỂN THỊ NGAY
         setCurrentScript(newScript);
         setSavedScripts(prev => [newScript, ...prev]);
         setStatus(AnalysisStatus.COMPLETE);
-        showNotification("Đã lưu kịch bản vào Cloud!", 'success');
+        setLoadingMessage('');
+
+        // 2. LƯU SAU
+        await saveToCloudSafe(newScript);
+
     } catch (error: any) {
         console.error(error);
         setStatus(AnalysisStatus.ERROR);
+        setLoadingMessage(`Lỗi: ${error.message}`);
         showNotification(error.message || "Lỗi khi phân tích URL.", 'error');
     }
   };
 
   const handleCopyScript = () => {
     if (!currentScript) return;
-
     const headers = ["Sản phẩm", "Phân cảnh", "Mô tả hình ảnh", "Kịch bản phát ngôn"];
-    
     const rows = currentScript.scenes.map((scene) => {
         const clean = (text: string) => (text || '').replace(/[\t\n\r]+/g, ' ').trim();
         const productCol = currentScript.tags.length > 0 ? currentScript.tags.join(", ") : "";
-
         return [
             clean(productCol),
             clean(`${scene.type} (${scene.startTime} - ${scene.endTime})`),
@@ -199,9 +241,7 @@ const App: React.FC = () => {
             clean(scene.audioScript)
         ].join("\t");
     });
-
     const tsvContent = headers.join("\t") + "\n" + rows.join("\n");
-    
     navigator.clipboard.writeText(tsvContent);
     showNotification("Đã copy dữ liệu dạng bảng!", 'success');
   };
@@ -220,7 +260,6 @@ const App: React.FC = () => {
         ].join("\t");
     });
     const tsvContent = headers.join("\t") + "\n" + rows.join("\n");
-
     navigator.clipboard.writeText(tsvContent)
       .then(() => {
           window.open("https://sheets.new", "_blank");
@@ -233,7 +272,7 @@ const App: React.FC = () => {
   };
 
   const handleOptimize = async () => {
-    if (!currentScript) return;
+    if (!currentScript || !user) return;
     setStatus(AnalysisStatus.OPTIMIZING);
     try {
         const optimizedScenes = await optimizeScriptWithAI(currentScript);
@@ -242,13 +281,13 @@ const App: React.FC = () => {
             scenes: optimizedScenes
         };
         
-        await saveScriptToDb(updatedScript);
-
+        // Update UI trước
         setCurrentScript(updatedScript);
         setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-        
-        showNotification("Đã tối ưu và cập nhật Cloud!", 'success');
         setStatus(AnalysisStatus.COMPLETE);
+
+        // Lưu sau
+        await saveToCloudSafe(updatedScript);
     } catch (e) {
         setStatus(AnalysisStatus.ERROR);
         showNotification("Lỗi khi tối ưu hóa.", 'error');
@@ -258,23 +297,22 @@ const App: React.FC = () => {
   const updateCurrentTags = async (newTags: string[]) => {
       if (currentScript) {
           const updatedScript = { ...currentScript, tags: newTags };
-          
           setCurrentScript(updatedScript);
           setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-
           try {
             await saveScriptToDb(updatedScript);
           } catch (e) {
-            showNotification("Lỗi lưu tag lên Cloud!", 'error');
+            showNotification("Lỗi lưu tag lên Cloud (Kiểm tra kết nối/Quyền)!", 'error');
           }
       }
   };
 
   const deleteScript = async (id: string) => {
-      if(!window.confirm("Bạn có chắc muốn xóa kịch bản này vĩnh viễn trên Cloud?")) return;
+      if(!window.confirm("Bạn có chắc muốn xóa kịch bản này vĩnh viễn?")) return;
+      if (!user) return;
 
       try {
-          await deleteScriptFromDb(id);
+          await deleteScriptFromDb(id, user.uid); // Pass user.uid to support Guest Mode delete
           setSavedScripts(savedScripts.filter(s => s.id !== id));
           if (currentScript?.id === id) {
               setCurrentScript(null);
@@ -296,7 +334,7 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-      return <Auth onLoginSuccess={() => {}} />;
+      return <Auth onLoginSuccess={() => {}} onGuestLogin={handleGuestLogin} />;
   }
 
   return (
@@ -315,7 +353,6 @@ const App: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-4">
-                 {/* User Profile / Logout */}
                 <div className="flex items-center gap-3 border-l border-gray-200 pl-4 ml-4">
                     <div className="hidden md:flex flex-col items-end">
                         <span className="text-xs font-semibold text-gray-700">{user.displayName}</span>
@@ -324,7 +361,7 @@ const App: React.FC = () => {
                     {user.photoURL ? (
                         <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border border-gray-200" />
                     ) : (
-                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${user.uid === 'guest' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
                             <UserIcon className="w-4 h-4" />
                         </div>
                     )}
@@ -346,7 +383,7 @@ const App: React.FC = () => {
           <div className="bg-white border-b border-gray-200 shadow-sm py-2">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
                  <button 
-                    onClick={() => { setCurrentScript(null); setStatus(AnalysisStatus.IDLE); }}
+                    onClick={() => { setCurrentScript(null); setStatus(AnalysisStatus.IDLE); setLoadingMessage(''); }}
                     className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-600 transition-colors"
                 >
                     <Plus className="w-4 h-4" />
@@ -382,13 +419,14 @@ const App: React.FC = () => {
                     isLoading={status === AnalysisStatus.ANALYZING} 
                     processingCount={processingState}
                     elapsedTime={timer}
+                    loadingMessage={loadingMessage} 
                 />
                 
                 {savedScripts.length > 0 && (
                     <div className="mt-12 w-full max-w-4xl">
                         <div className="flex items-center gap-2 mb-4 text-gray-500 font-medium">
                             <Layout className="w-4 h-4" />
-                            <span>Kịch bản gần đây trên Cloud</span>
+                            <span>Kịch bản gần đây {user.uid === 'guest' ? '(Trên máy này)' : '(Trên Cloud)'}</span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {savedScripts.slice(0, 3).map(script => (
@@ -399,6 +437,7 @@ const App: React.FC = () => {
                                 >
                                     <h4 className="font-semibold text-gray-800 truncate group-hover:text-blue-600">{script.title}</h4>
                                     <p className="text-xs text-gray-400 mt-1">{new Date(script.createdAt).toLocaleDateString()}</p>
+                                    {script.userId === 'guest' && user.uid !== 'guest' && <span className="text-[10px] text-amber-500 flex items-center gap-1 mt-1"><WifiOff className="w-3 h-3"/> Chưa đồng bộ</span>}
                                 </button>
                             ))}
                         </div>
@@ -410,17 +449,14 @@ const App: React.FC = () => {
         {/* Main Workspace */}
         {currentScript && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                
-                {/* Left Content: Script Viewer */}
                 <div className="lg:col-span-9 space-y-6">
-                    
                     {/* Action Bar */}
                     <div className="flex flex-wrap items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-sm gap-4">
                         <div className="flex items-center gap-3">
                             <span className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 ${status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? 'bg-yellow-100 text-yellow-800 animate-pulse' : 'bg-green-100 text-green-800'}`}>
                                 {status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? <Timer className="w-3 h-3"/> : null}
                                 {status === AnalysisStatus.OPTIMIZING ? `Đang tối ưu AI (${formatTime(timer)})...` : 
-                                 status === AnalysisStatus.ANALYZING ? `Đang xử lý ${processingState?.current}/${processingState?.total} (${formatTime(timer)})...` : 'Sẵn sàng'}
+                                 status === AnalysisStatus.ANALYZING ? `Đang xử lý... (${formatTime(timer)})` : 'Sẵn sàng'}
                             </span>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -452,7 +488,6 @@ const App: React.FC = () => {
                     <ScriptViewer analysis={currentScript} onUpdateTags={updateCurrentTags} />
                 </div>
 
-                {/* Right Content: Sidebar */}
                 <div className="lg:col-span-3">
                     <ScriptLibrary 
                         savedScripts={savedScripts} 

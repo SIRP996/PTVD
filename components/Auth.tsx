@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { Layout, ShieldCheck, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Layout, ShieldCheck, Mail, Lock, ArrowRight, UserCircle } from 'lucide-react';
 import { auth, googleProvider } from '../firebaseConfig';
 
 interface AuthProps {
-  // Callback không cần tham số user vì App.tsx sẽ lắng nghe onAuthStateChanged
   onLoginSuccess: () => void;
+  onGuestLogin: () => void; // Thêm prop cho guest login
 }
 
-export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
+export const Auth: React.FC<AuthProps> = ({ onLoginSuccess, onGuestLogin }) => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -30,7 +30,7 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
         onLoginSuccess();
     } catch (err: any) {
         console.error("Login Error:", err);
-        setError("Đăng nhập Google thất bại: " + (err.message || "Lỗi không xác định"));
+        setError("Đăng nhập Google thất bại. Hãy thử 'Chế độ Khách' nếu bạn chưa cấu hình Firebase.");
     } finally {
         setLoading(false);
     }
@@ -59,7 +59,6 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
         onLoginSuccess();
     } catch (err: any) {
         console.error("Auth Error:", err);
-        // Mapping lỗi phổ biến sang tiếng Việt
         let msg = "Có lỗi xảy ra: " + err.message;
         if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
             msg = "Email hoặc mật khẩu không chính xác.";
@@ -101,9 +100,28 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
             {error && (
                 <div className="mb-6 p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center gap-2 border border-red-100 animate-pulse">
                     <ShieldCheck className="w-4 h-4 flex-shrink-0" />
-                    {error}
+                    <span>{error}</span>
                 </div>
             )}
+
+            {/* Guest Login Button (Quick Fix) */}
+            <button
+                onClick={onGuestLogin}
+                type="button"
+                className="w-full flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold py-3 px-4 rounded-xl hover:bg-emerald-100 mb-6 transition-all"
+            >
+                <UserCircle className="w-5 h-5" />
+                Dùng thử ngay (Không cần đăng nhập)
+            </button>
+
+            <div className="relative mb-6">
+                <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200"></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-white text-gray-500">Hoặc đăng nhập bằng Email</span>
+                </div>
+            </div>
 
             {/* Email/Password Form */}
             <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">

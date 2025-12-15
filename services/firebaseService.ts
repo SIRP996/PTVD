@@ -2,14 +2,40 @@ import { db } from "../firebaseConfig";
 import { ScriptAnalysis } from "../types";
 
 const COLLECTION_NAME = "scripts";
+const GUEST_STORAGE_KEY = "tiktok_scripts_guest";
 
-// --- MAIN SERVICES (FIREBASE NAMESPACED SYNTAX) ---
+// --- HELPERS FOR GUEST MODE ---
+const getGuestScripts = (): ScriptAnalysis[] => {
+  try {
+    const data = localStorage.getItem(GUEST_STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch (e) { return []; }
+};
+
+const saveGuestScripts = (scripts: ScriptAnalysis[]) => {
+  localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(scripts));
+};
+
+// --- MAIN SERVICES ---
 
 export const saveScriptToDb = async (script: ScriptAnalysis) => {
+  // GUEST MODE
+  if (script.userId === 'guest') {
+    const scripts = getGuestScripts();
+    const index = scripts.findIndex(s => s.id === script.id);
+    if (index >= 0) {
+      scripts[index] = script;
+    } else {
+      scripts.push(script);
+    }
+    saveGuestScripts(scripts);
+    console.log("Saved to LocalStorage (Guest):", script.id);
+    return;
+  }
+
+  // FIREBASE MODE
   if (!db) throw new Error("Firebase DB not initialized");
-  
   try {
-    // V8/Compat syntax: db.collection().doc().set()
     await db.collection(COLLECTION_NAME).doc(script.id).set(script);
     console.log("Saved to Firestore:", script.id);
   } catch (e) {
@@ -19,10 +45,15 @@ export const saveScriptToDb = async (script: ScriptAnalysis) => {
 };
 
 export const fetchScriptsFromDb = async (userId: string): Promise<ScriptAnalysis[]> => {
-  if (!db) throw new Error("Firebase DB not initialized");
+  // GUEST MODE
+  if (userId === 'guest') {
+    const scripts = getGuestScripts();
+    return scripts.sort((a, b) => b.createdAt - a.createdAt);
+  }
 
+  // FIREBASE MODE
+  if (!db) throw new Error("Firebase DB not initialized");
   try {
-    // V8/Compat syntax: db.collection().where().get()
     const querySnapshot = await db.collection(COLLECTION_NAME)
       .where("userId", "==", userId)
       .get();
@@ -32,7 +63,6 @@ export const fetchScriptsFromDb = async (userId: string): Promise<ScriptAnalysis
       scripts.push(doc.data() as ScriptAnalysis);
     });
     
-    // Sort logic (unchanged)
     return scripts.sort((a, b) => b.createdAt - a.createdAt);
   } catch (e) {
     console.error("Error fetching from Firebase:", e);
@@ -40,11 +70,20 @@ export const fetchScriptsFromDb = async (userId: string): Promise<ScriptAnalysis
   }
 };
 
-export const deleteScriptFromDb = async (id: string) => {
-  if (!db) throw new Error("Firebase DB not initialized");
+export const deleteScriptFromDb = async (id: string, userId?: string) => {
+  // GUEST MODE CHECK
+  // Nếu userId là guest hoặc tìm thấy trong localStorage thì xóa ở local
+  if (userId === 'guest') {
+    const scripts = getGuestScripts();
+    const newScripts = scripts.filter(s => s.id !== id);
+    saveGuestScripts(newScripts);
+    console.log("Deleted from LocalStorage:", id);
+    return;
+  }
 
+  // FIREBASE MODE
+  if (!db) throw new Error("Firebase DB not initialized");
   try {
-    // V8/Compat syntax
     await db.collection(COLLECTION_NAME).doc(id).delete();
     console.log("Deleted from Firestore:", id);
   } catch (e) {
