@@ -115,7 +115,7 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
                         </div>
                         <input
                             type="email"
-                            className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-all"
+                            className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl leading-5 bg-white text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-all"
                             placeholder="Email của bạn"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
@@ -130,7 +130,7 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
                         </div>
                         <input
                             type="password"
-                            className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-all"
+                            className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl leading-5 bg-white text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-all"
                             placeholder="Mật khẩu"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
