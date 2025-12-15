@@ -1,29 +1,22 @@
 import React, { useCallback, useState } from 'react';
-import { UploadCloud, Link as LinkIcon, AlertCircle, Layers } from 'lucide-react';
+import { UploadCloud, Link as LinkIcon, AlertCircle, Layers, Timer, FileVideo } from 'lucide-react';
 
 interface VideoUploaderProps {
   onFileSelect: (files: File[]) => void;
   onUrlSubmit: (url: string) => void;
   isLoading: boolean;
   processingCount?: { current: number; total: number };
+  elapsedTime?: number;
 }
 
-export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUrlSubmit, isLoading, processingCount }) => {
+export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUrlSubmit, isLoading, processingCount, elapsedTime = 0 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [urlInput, setUrlInput] = useState('');
 
-  // Hàm kiểm tra file video an toàn hơn (check cả đuôi file)
-  const isValidVideoFile = (file: File) => {
-    const validTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska', 'video/avi'];
-    const validExtensions = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv', '.wmv'];
-    
-    // 1. Check theo Mime Type chuẩn
-    if (file.type && file.type.startsWith('video/')) return true;
-    if (validTypes.includes(file.type)) return true;
-
-    // 2. Fallback: Check theo đuôi file (nếu Mime Type bị rỗng)
-    const fileName = file.name.toLowerCase();
-    return validExtensions.some(ext => fileName.endsWith(ext));
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -43,31 +36,35 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files: File[] = [];
-      Array.from(e.dataTransfer.files).forEach((file: any) => {
-          if (isValidVideoFile(file)) {
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      
+      // Lọc chỉ lấy file video (giống code cũ để đảm bảo an toàn)
+      droppedFiles.forEach((file) => {
+          if (file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|avi|wmv|flv|webm|mkv)$/i)) {
               files.push(file);
-          } else {
-              console.warn("File bị bỏ qua do không phải video:", file.name, file.type);
           }
       });
       
       if (files.length > 0) {
         onFileSelect(files);
       } else {
-        alert("Không tìm thấy file video hợp lệ. Vui lòng tải lên file .MP4, .MOV, .WebM.");
+        alert("Vui lòng chỉ kéo thả file Video (MP4, MOV, WebM...)!");
       }
     }
   }, [onFileSelect]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.preventDefault();
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files);
-      // Input native filter đã lọc rồi, nhưng check lại cho chắc
-      const validFiles = files.filter(isValidVideoFile);
+      // Lọc sơ bộ
+      const validFiles = files.filter(f => f.type.startsWith('video/') || f.name.match(/\.(mp4|mov|avi|wmv|flv|webm|mkv)$/i));
+      
       if (validFiles.length > 0) {
           onFileSelect(validFiles);
+      } else {
+          alert("Bạn đã chọn file không phải video.");
       }
+      e.target.value = '';
     }
   };
 
@@ -113,7 +110,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
         onDragOver={handleDrag}
         onDrop={handleDrop}
       >
-        <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center pointer-events-none">
+        <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center">
             {isLoading ? (
                 <div className="flex flex-col items-center">
                      <div className="relative">
@@ -123,7 +120,13 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
                      <p className="text-lg text-blue-600 font-bold animate-pulse">
                         {processingCount ? `Đang xử lý ${processingCount.current} / ${processingCount.total} video` : 'Đang phân tích...'}
                      </p>
-                     <p className="text-xs text-gray-400 mt-1">Đừng tắt trình duyệt nhé!</p>
+                     
+                     {/* Timer Display */}
+                     <div className="flex items-center gap-2 mt-2 text-amber-700 bg-amber-100 px-4 py-1.5 rounded-full text-sm font-bold border border-amber-300 shadow-sm animate-pulse">
+                        <Timer className="w-4 h-4" />
+                        <span>Thời gian: {formatTime(elapsedTime)}</span>
+                     </div>
+                     <p className="text-xs text-gray-500 mt-2 font-medium">Quá trình này thường mất 30s - 60s.</p>
                 </div>
             ) : (
                 <>
@@ -147,7 +150,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
 
       <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-200">
         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-        <p>Tip: Bạn có thể kéo thả hàng loạt video vào ô trên. Hệ thống sẽ tự động xếp hàng và xử lý từng video một.</p>
+        <p>Tip: Nếu video quá dài hoặc nặng (trên 50MB), hãy nén nhỏ lại trước khi tải lên để tốc độ xử lý nhanh nhất.</p>
       </div>
     </div>
   );

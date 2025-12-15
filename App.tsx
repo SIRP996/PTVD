@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { VideoUploader } from './components/VideoUploader';
 import { ScriptViewer } from './components/ScriptViewer';
 import { ScriptLibrary } from './components/ScriptLibrary';
@@ -7,19 +7,47 @@ import { ScriptAnalysis, AnalysisStatus } from './types';
 import { analyzeVideoFile, analyzeVideoUrl, optimizeScriptWithAI } from './services/geminiService';
 import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb } from './services/firebaseService';
 import { auth } from './firebaseConfig';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon } from 'lucide-react';
+import firebase from 'firebase/compat/app'; // Updated to compat import
+import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<firebase.User | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
 
   const [currentScript, setCurrentScript] = useState<ScriptAnalysis | null>(null);
   const [savedScripts, setSavedScripts] = useState<ScriptAnalysis[]>([]);
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
-  const [notification, setNotification] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
   const [processingState, setProcessingState] = useState<{current: number, total: number} | undefined>(undefined);
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Timer logic
+  const [timer, setTimer] = useState(0);
+  const timerIntervalRef = useRef<number | null>(null);
+
+  useEffect(() => {
+      if (status === AnalysisStatus.ANALYZING || status === AnalysisStatus.OPTIMIZING) {
+          setTimer(0);
+          timerIntervalRef.current = window.setInterval(() => {
+              setTimer(prev => prev + 1);
+          }, 1000);
+      } else {
+          if (timerIntervalRef.current) {
+              clearInterval(timerIntervalRef.current);
+              timerIntervalRef.current = null;
+          }
+      }
+      return () => {
+          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      };
+  }, [status]);
+
+  // Format Timer
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Monitor Real Firebase Auth State
   useEffect(() => {
@@ -27,7 +55,8 @@ const App: React.FC = () => {
         setLoadingAuth(false);
         return;
     }
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    // Using namespaced onAuthStateChanged
+    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
         setUser(currentUser);
         setLoadingAuth(false);
     });
@@ -44,7 +73,7 @@ const App: React.FC = () => {
                 setSavedScripts(scripts);
             } catch (error) {
                 console.error("Failed to load scripts", error);
-                showNotification("Lỗi tải dữ liệu từ Cloud.");
+                showNotification("Lỗi tải dữ liệu từ Cloud.", 'error');
             } finally {
                 setIsSyncing(false);
             }
@@ -58,14 +87,14 @@ const App: React.FC = () => {
 
   const handleLogout = async () => {
       if (auth) {
-        await signOut(auth);
-        showNotification("Đã đăng xuất.");
+        await auth.signOut();
+        showNotification("Đã đăng xuất.", 'success');
       }
   };
 
-  const showNotification = (msg: string) => {
-      setNotification(msg);
-      setTimeout(() => setNotification(null), 4000); 
+  const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
+      setNotification({ msg, type });
+      setTimeout(() => setNotification(null), 5000); 
   }
 
   // BATCH PROCESSING LOGIC
@@ -83,11 +112,14 @@ const App: React.FC = () => {
         setProcessingState({ current: i + 1, total: files.length });
         
         try {
+            // Hiển thị thông báo đang xử lý file nào để người dùng biết app không bị treo
+            showNotification(`Đang đọc file ${i+1}/${files.length}: ${file.name}...`, 'success');
+            
             const result = await analyzeVideoFile(file);
             
             const newScript: ScriptAnalysis = {
                 id: `script-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                userId: user.uid, // Gán user ID thật
+                userId: user.uid,
                 title: result.title || file.name,
                 videoName: file.name,
                 createdAt: Date.now(),
@@ -95,29 +127,35 @@ const App: React.FC = () => {
                 scenes: result.scenes || []
             };
 
-            // Save to Real Firestore
             await saveScriptToDb(newScript);
 
-            // Update local state
             setSavedScripts(prev => [newScript, ...prev]);
             setCurrentScript(newScript);
             successCount++;
 
-        } catch (error) {
+        } catch (error: any) {
             console.error(`Error processing file ${file.name}:`, error);
-            showNotification(`Lỗi phân tích file: ${file.name}`);
+            // Hiển thị lỗi cụ thể
+            showNotification(`Lỗi ${file.name}: ${error.message}`, 'error');
+            // Dừng lại 1 chút để người dùng kịp đọc lỗi trước khi qua file tiếp theo
+            await new Promise(r => setTimeout(r, 2000));
         }
     }
 
     setProcessingState(undefined);
     setStatus(AnalysisStatus.COMPLETE);
-    showNotification(`Đã hoàn thành và đồng bộ ${successCount}/${files.length} video!`);
+    
+    if (successCount > 0) {
+        showNotification(`Đã hoàn thành ${successCount}/${files.length} video!`, 'success');
+    } else {
+        showNotification("Không thể xử lý video nào. Vui lòng kiểm tra lại file.", 'error');
+    }
   };
 
   const handleUrlSubmit = async (url: string) => {
     if (!user) return;
     setStatus(AnalysisStatus.ANALYZING);
-    showNotification("Đang tải và phân tích video từ URL...");
+    showNotification("Đang tải và phân tích video từ URL...", 'success');
     
     try {
         const result = await analyzeVideoUrl(url);
@@ -137,11 +175,11 @@ const App: React.FC = () => {
         setCurrentScript(newScript);
         setSavedScripts(prev => [newScript, ...prev]);
         setStatus(AnalysisStatus.COMPLETE);
-        showNotification("Đã lưu kịch bản vào Cloud!");
+        showNotification("Đã lưu kịch bản vào Cloud!", 'success');
     } catch (error: any) {
         console.error(error);
         setStatus(AnalysisStatus.ERROR);
-        showNotification(error.message || "Lỗi khi phân tích URL.");
+        showNotification(error.message || "Lỗi khi phân tích URL.", 'error');
     }
   };
 
@@ -165,7 +203,7 @@ const App: React.FC = () => {
     const tsvContent = headers.join("\t") + "\n" + rows.join("\n");
     
     navigator.clipboard.writeText(tsvContent);
-    showNotification("Đã copy dữ liệu dạng bảng!");
+    showNotification("Đã copy dữ liệu dạng bảng!", 'success');
   };
 
   const handleOpenGoogleSheets = () => {
@@ -186,11 +224,11 @@ const App: React.FC = () => {
     navigator.clipboard.writeText(tsvContent)
       .then(() => {
           window.open("https://sheets.new", "_blank");
-          showNotification("Đã copy! Nhấn Ctrl+V vào Google Sheet.");
+          showNotification("Đã copy! Nhấn Ctrl+V vào Google Sheet.", 'success');
       })
       .catch((err) => {
           console.error('Could not copy text: ', err);
-          showNotification("Lỗi copy clipboard.");
+          showNotification("Lỗi copy clipboard.", 'error');
       });
   };
 
@@ -209,11 +247,11 @@ const App: React.FC = () => {
         setCurrentScript(updatedScript);
         setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
         
-        showNotification("Đã tối ưu và cập nhật Cloud!");
+        showNotification("Đã tối ưu và cập nhật Cloud!", 'success');
         setStatus(AnalysisStatus.COMPLETE);
     } catch (e) {
         setStatus(AnalysisStatus.ERROR);
-        showNotification("Lỗi khi tối ưu hóa.");
+        showNotification("Lỗi khi tối ưu hóa.", 'error');
     }
   };
 
@@ -227,7 +265,7 @@ const App: React.FC = () => {
           try {
             await saveScriptToDb(updatedScript);
           } catch (e) {
-            showNotification("Lỗi lưu tag lên Cloud!");
+            showNotification("Lỗi lưu tag lên Cloud!", 'error');
           }
       }
   };
@@ -241,9 +279,9 @@ const App: React.FC = () => {
           if (currentScript?.id === id) {
               setCurrentScript(null);
           }
-          showNotification("Đã xóa kịch bản.");
+          showNotification("Đã xóa kịch bản.", 'success');
       } catch (e) {
-          showNotification("Lỗi khi xóa kịch bản.");
+          showNotification("Lỗi khi xóa kịch bản.", 'error');
       }
   };
 
@@ -321,9 +359,9 @@ const App: React.FC = () => {
       <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
         {notification && (
-            <div className="fixed top-20 right-8 z-50 bg-gray-800 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-fade-in-down border border-gray-700">
-                <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0" />
-                <span className="font-medium">{notification}</span>
+            <div className={`fixed top-20 right-8 z-50 px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-fade-in-down border ${notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-gray-800 text-white border-gray-700'}`}>
+                {notification.type === 'error' ? <AlertTriangle className="w-6 h-6 text-red-500" /> : <CheckCircle className="w-6 h-6 text-green-400" />}
+                <span className="font-medium">{notification.msg}</span>
             </div>
         )}
 
@@ -343,6 +381,7 @@ const App: React.FC = () => {
                     onUrlSubmit={handleUrlSubmit}
                     isLoading={status === AnalysisStatus.ANALYZING} 
                     processingCount={processingState}
+                    elapsedTime={timer}
                 />
                 
                 {savedScripts.length > 0 && (
@@ -378,9 +417,10 @@ const App: React.FC = () => {
                     {/* Action Bar */}
                     <div className="flex flex-wrap items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-sm gap-4">
                         <div className="flex items-center gap-3">
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? 'bg-yellow-100 text-yellow-800 animate-pulse' : 'bg-green-100 text-green-800'}`}>
-                                {status === AnalysisStatus.OPTIMIZING ? 'Đang tối ưu AI...' : 
-                                 status === AnalysisStatus.ANALYZING ? `Đang xử lý ${processingState?.current}/${processingState?.total}...` : 'Sẵn sàng'}
+                            <span className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 ${status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? 'bg-yellow-100 text-yellow-800 animate-pulse' : 'bg-green-100 text-green-800'}`}>
+                                {status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? <Timer className="w-3 h-3"/> : null}
+                                {status === AnalysisStatus.OPTIMIZING ? `Đang tối ưu AI (${formatTime(timer)})...` : 
+                                 status === AnalysisStatus.ANALYZING ? `Đang xử lý ${processingState?.current}/${processingState?.total} (${formatTime(timer)})...` : 'Sẵn sàng'}
                             </span>
                         </div>
                         <div className="flex flex-wrap gap-2">

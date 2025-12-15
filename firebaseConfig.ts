@@ -1,6 +1,6 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/auth';
+import 'firebase/compat/firestore';
 
 // --- CẤU HÌNH FIREBASE ---
 // Anh hãy thay thế các giá trị bên dưới bằng thông tin từ Firebase Console của anh
@@ -13,10 +13,12 @@ const firebaseConfig = {
   appId: "1:284293128834:web:29a680badea3fea8460a9b"
 };
 
-// Khởi tạo Firebase
-const app = initializeApp(firebaseConfig);
+// Khởi tạo Firebase (Check duplicates for hot-reload safety)
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
 
 // Export các service để dùng trong app
-export const db = getFirestore(app);
-export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
+export const db = firebase.firestore();
+export const auth = firebase.auth();
+export const googleProvider = new firebase.auth.GoogleAuthProvider();

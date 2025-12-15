@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Layout, ShieldCheck, Mail, Lock, User, ArrowRight } from 'lucide-react';
-import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { Layout, ShieldCheck, Mail, Lock, ArrowRight } from 'lucide-react';
 import { auth, googleProvider } from '../firebaseConfig';
 
 interface AuthProps {
@@ -27,7 +26,7 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
     setError(null);
     
     try {
-        await signInWithPopup(auth, googleProvider);
+        await auth.signInWithPopup(googleProvider);
         onLoginSuccess();
     } catch (err: any) {
         console.error("Login Error:", err);
@@ -53,9 +52,9 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
 
     try {
         if (isSignUp) {
-            await createUserWithEmailAndPassword(auth, email, password);
+            await auth.createUserWithEmailAndPassword(email, password);
         } else {
-            await signInWithEmailAndPassword(auth, email, password);
+            await auth.signInWithEmailAndPassword(email, password);
         }
         onLoginSuccess();
     } catch (err: any) {
