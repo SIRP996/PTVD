@@ -1,8 +1,17 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Scene, ScriptAnalysis } from "../types";
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper để lấy instance AI an toàn
+// Không khởi tạo ngay ở top-level để tránh crash app nếu thiếu Key
+const getAiClient = () => {
+  const apiKey = process.env.API_KEY;
+  
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("Chưa cấu hình API Key Gemini. Vui lòng kiểm tra biến môi trường VITE_GEMINI_API_KEY.");
+  }
+  
+  return new GoogleGenAI({ apiKey });
+};
 
 const SYSTEM_INSTRUCTION = `
 Bạn là một chuyên gia biên kịch và phân tích video ngắn (TikTok/Reels/Shorts). 
@@ -44,6 +53,8 @@ const RESPONSE_SCHEMA = {
  * Core function to send base64 video data to Gemini
  */
 async function analyzeBase64Video(base64Data: string, mimeType: string): Promise<Partial<ScriptAnalysis>> {
+  const ai = getAiClient(); // Khởi tạo AI tại đây
+  
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: {
@@ -239,6 +250,8 @@ export const analyzeVideoUrl = async (url: string): Promise<Partial<ScriptAnalys
 
 export const optimizeScriptWithAI = async (currentAnalysis: ScriptAnalysis): Promise<Scene[]> => {
   try {
+    const ai = getAiClient(); // Khởi tạo AI tại đây
+    
     const prompt = `
       Dưới đây là một kịch bản video TikTok hiện tại (định dạng JSON).
       Hãy tối ưu hóa nội dung của phần "audioScript" (Kịch bản phát ngôn) để nó hấp dẫn hơn, viral hơn, 
