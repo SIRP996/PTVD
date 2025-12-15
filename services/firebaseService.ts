@@ -16,6 +16,39 @@ const saveGuestScripts = (scripts: ScriptAnalysis[]) => {
   localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(scripts));
 };
 
+// --- MIGRATION SERVICE (New) ---
+export const migrateGuestDataToUser = async (realUserId: string) => {
+  if (!db) return 0;
+  
+  const guestScripts = getGuestScripts();
+  if (guestScripts.length === 0) return 0;
+
+  console.log(`Found ${guestScripts.length} guest scripts to migrate...`);
+  let count = 0;
+
+  const batch = db.batch();
+  let hasData = false;
+
+  for (const script of guestScripts) {
+    // Chỉ migrate những script chưa có owner hoặc owner là guest
+    if (script.userId === 'guest') {
+        const newScript = { ...script, userId: realUserId };
+        const docRef = db.collection(COLLECTION_NAME).doc(script.id);
+        batch.set(docRef, newScript);
+        hasData = true;
+        count++;
+    }
+  }
+
+  if (hasData) {
+      await batch.commit();
+      // Xóa data guest sau khi đã sync thành công để tránh duplicate lần sau
+      localStorage.removeItem(GUEST_STORAGE_KEY);
+  }
+  
+  return count;
+};
+
 // --- MAIN SERVICES ---
 
 export const saveScriptToDb = async (script: ScriptAnalysis) => {

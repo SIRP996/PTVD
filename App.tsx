@@ -5,10 +5,10 @@ import { ScriptLibrary } from './components/ScriptLibrary';
 import { Auth } from './components/Auth';
 import { ScriptAnalysis, AnalysisStatus } from './types';
 import { analyzeVideoFile, analyzeVideoUrl, optimizeScriptWithAI } from './services/geminiService';
-import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb } from './services/firebaseService';
+import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb, migrateGuestDataToUser } from './services/firebaseService';
 import { auth } from './firebaseConfig';
 import firebase from 'firebase/compat/app'; // Updated to compat import
-import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer, WifiOff } from 'lucide-react';
+import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer, WifiOff, RefreshCw } from 'lucide-react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<firebase.User | null>(null);
@@ -20,6 +20,10 @@ const App: React.FC = () => {
   const [notification, setNotification] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
   const [processingState, setProcessingState] = useState<{current: number, total: number} | undefined>(undefined);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
+  
+  // State mới để theo dõi item đang xử lý (File hoặc URL string)
+  const [processingItem, setProcessingItem] = useState<File | string | null>(null);
+  
   const [isSyncing, setIsSyncing] = useState(false);
   
   // Timer logic
@@ -56,10 +60,19 @@ const App: React.FC = () => {
         setLoadingAuth(false);
         return;
     }
-    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-        // Chỉ update nếu không phải là guest user giả mạo đang đăng nhập
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
         if (currentUser) {
            setUser(currentUser);
+           // --- AUTO MIGRATE GUEST DATA ---
+           // Khi người dùng đăng nhập thật, kiểm tra xem có dữ liệu Guest cũ không và sync lên
+           try {
+               const migratedCount = await migrateGuestDataToUser(currentUser.uid);
+               if (migratedCount > 0) {
+                   showNotification(`Đã đồng bộ ${migratedCount} kịch bản cũ lên tài khoản của bạn!`, 'success');
+               }
+           } catch (e) {
+               console.error("Migration failed", e);
+           }
         } else if (user?.uid !== 'guest') {
            setUser(null);
         }
@@ -126,14 +139,18 @@ const App: React.FC = () => {
   // --- HÀM LƯU DB RIÊNG BIỆT ---
   const saveToCloudSafe = async (script: ScriptAnalysis) => {
       try {
-          setLoadingMessage("Đang đồng bộ Cloud...");
+          // Chỉ hiện loading message nếu đang ở trang upload đơn
+          if (status !== AnalysisStatus.ANALYZING) setLoadingMessage("Đang đồng bộ Cloud...");
+          
           await saveScriptToDb(script);
-          showNotification("Đã lưu thành công!", 'success');
+          // Không spam notification nếu đang chạy batch
+          if (!processingState) {
+              showNotification("Đã lưu thành công!", 'success');
+          }
       } catch (dbError: any) {
           console.error("FIREBASE SAVE ERROR:", dbError);
-          let msg = "Đã có kết quả nhưng LỖI LƯU CLOUD.";
-          if (dbError.code === 'permission-denied') msg += " (Thiếu quyền Firestore Rules)";
-          else if (dbError.code === 'unavailable') msg += " (Mất kết nối mạng)";
+          let msg = "Lỗi lưu trữ (Kiểm tra mạng).";
+          if (dbError.code === 'permission-denied') msg += " (Thiếu quyền truy cập)";
           showNotification(msg, 'error');
       }
   };
@@ -152,6 +169,7 @@ const App: React.FC = () => {
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setProcessingState({ current: i + 1, total: files.length });
+        setProcessingItem(file); // Cập nhật file đang xử lý để hiển thị preview
         
         try {
             const result = await analyzeVideoFile(file, (msg) => setLoadingMessage(msg));
@@ -166,8 +184,15 @@ const App: React.FC = () => {
                 scenes: result.scenes || []
             };
 
-            // 1. HIỂN THỊ NGAY LẬP TỨC (QUAN TRỌNG)
-            setCurrentScript(newScript);
+            // UX FIX: 
+            // - Nếu là video đầu tiên: Hiển thị ngay lên màn hình chính.
+            // - Nếu là video thứ 2, 3...: Chỉ thêm vào list bên phải, KHÔNG thay đổi màn hình chính để tránh làm phiền người dùng đang đọc.
+            if (i === 0) {
+                setCurrentScript(newScript);
+            } else {
+                showNotification(`Đã xong "${file.name}" (Xem ở cột phải)`, 'success');
+            }
+            
             setSavedScripts(prev => [newScript, ...prev]);
             successCount++;
 
@@ -177,17 +202,18 @@ const App: React.FC = () => {
         } catch (error: any) {
             console.error(`Error processing file ${file.name}:`, error);
             showNotification(`Lỗi phân tích ${file.name}: ${error.message}`, 'error');
-            setLoadingMessage(`Lỗi: ${error.message}`);
+            // Nếu lỗi, chờ xíu rồi qua file tiếp theo
             await new Promise(r => setTimeout(r, 2000));
         }
     }
 
     setProcessingState(undefined);
+    setProcessingItem(null); // Clear item
     setStatus(AnalysisStatus.COMPLETE);
     setLoadingMessage('');
     
     if (successCount > 0) {
-        if(successCount === files.length) showNotification(`Hoàn tất phân tích!`, 'success');
+        showNotification(`Hoàn tất ${successCount}/${files.length} video!`, 'success');
     } else {
         showNotification("Không thể xử lý video nào.", 'error');
     }
@@ -197,6 +223,7 @@ const App: React.FC = () => {
     if (!user) return;
     setStatus(AnalysisStatus.ANALYZING);
     setLoadingMessage("Đang khởi tạo kết nối...");
+    setProcessingItem(url); // Cập nhật URL đang xử lý
     
     try {
         const result = await analyzeVideoUrl(url, (msg) => setLoadingMessage(msg));
@@ -225,6 +252,8 @@ const App: React.FC = () => {
         setStatus(AnalysisStatus.ERROR);
         setLoadingMessage(`Lỗi: ${error.message}`);
         showNotification(error.message || "Lỗi khi phân tích URL.", 'error');
+    } finally {
+        setProcessingItem(null); // Clear item
     }
   };
 
@@ -349,7 +378,7 @@ const App: React.FC = () => {
                     <Layout className="w-6 h-6" />
                 </div>
                 <span className="font-bold text-xl tracking-tight text-gray-900 hidden sm:block">TikTok Script Architect</span>
-                {isSyncing && <span className="text-xs text-gray-400 flex items-center gap-1 ml-2"><Cloud className="w-3 h-3 animate-bounce"/> Đồng bộ...</span>}
+                {isSyncing && <span className="text-xs text-gray-400 flex items-center gap-1 ml-2"><RefreshCw className="w-3 h-3 animate-spin"/> Đồng bộ...</span>}
             </div>
             
             <div className="flex items-center gap-4">
@@ -420,6 +449,7 @@ const App: React.FC = () => {
                     processingCount={processingState}
                     elapsedTime={timer}
                     loadingMessage={loadingMessage} 
+                    currentProcessingItem={processingItem} // Pass prop mới
                 />
                 
                 {savedScripts.length > 0 && (
