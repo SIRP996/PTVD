@@ -2,7 +2,6 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Scene, ScriptAnalysis } from "../types";
 
 // Helper để lấy instance AI an toàn
-// Không khởi tạo ngay ở top-level để tránh crash app nếu thiếu Key
 const getAiClient = () => {
   const apiKey = process.env.API_KEY;
   
@@ -53,15 +52,18 @@ const RESPONSE_SCHEMA = {
  * Core function to send base64 video data to Gemini
  */
 async function analyzeBase64Video(base64Data: string, mimeType: string): Promise<Partial<ScriptAnalysis>> {
-  const ai = getAiClient(); // Khởi tạo AI tại đây
+  const ai = getAiClient();
   
+  // Fallback if mimeType is empty or invalid for common video containers
+  const validMimeType = (mimeType && mimeType.startsWith('video/')) ? mimeType : 'video/mp4';
+
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: {
       parts: [
         {
           inlineData: {
-            mimeType: mimeType,
+            mimeType: validMimeType,
             data: base64Data
           }
         },
@@ -222,9 +224,10 @@ export const analyzeVideoUrl = async (url: string): Promise<Partial<ScriptAnalys
     throw new Error(error.message || "Không thể tải video từ link này. Vui lòng tải file về và upload thủ công.");
   }
 
-  // Validation
-  if (!blob.type.startsWith('video/')) {
-      throw new Error(`Dữ liệu tải về có định dạng '${blob.type}' (không phải video). Hãy chắc chắn link đúng là video công khai.`);
+  // Validation: Relaxed check
+  if (blob.type.startsWith('image/') || blob.type.includes('html')) {
+     // Basic check to ensure it's not an image or error page
+     throw new Error(`Link này trả về ${blob.type}, không phải video.`);
   }
 
   try {
@@ -250,7 +253,7 @@ export const analyzeVideoUrl = async (url: string): Promise<Partial<ScriptAnalys
 
 export const optimizeScriptWithAI = async (currentAnalysis: ScriptAnalysis): Promise<Scene[]> => {
   try {
-    const ai = getAiClient(); // Khởi tạo AI tại đây
+    const ai = getAiClient();
     
     const prompt = `
       Dưới đây là một kịch bản video TikTok hiện tại (định dạng JSON).

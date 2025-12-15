@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { UploadCloud, FileVideo, Link as LinkIcon, AlertCircle, Layers } from 'lucide-react';
+import { UploadCloud, Link as LinkIcon, AlertCircle, Layers } from 'lucide-react';
 
 interface VideoUploaderProps {
   onFileSelect: (files: File[]) => void;
@@ -11,6 +11,20 @@ interface VideoUploaderProps {
 export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUrlSubmit, isLoading, processingCount }) => {
   const [dragActive, setDragActive] = useState(false);
   const [urlInput, setUrlInput] = useState('');
+
+  // Hàm kiểm tra file video an toàn hơn (check cả đuôi file)
+  const isValidVideoFile = (file: File) => {
+    const validTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska', 'video/avi'];
+    const validExtensions = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv', '.wmv'];
+    
+    // 1. Check theo Mime Type chuẩn
+    if (file.type && file.type.startsWith('video/')) return true;
+    if (validTypes.includes(file.type)) return true;
+
+    // 2. Fallback: Check theo đuôi file (nếu Mime Type bị rỗng)
+    const fileName = file.name.toLowerCase();
+    return validExtensions.some(ext => fileName.endsWith(ext));
+  };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -30,15 +44,17 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files: File[] = [];
       Array.from(e.dataTransfer.files).forEach((file: any) => {
-          if (file.type.startsWith('video/')) {
+          if (isValidVideoFile(file)) {
               files.push(file);
+          } else {
+              console.warn("File bị bỏ qua do không phải video:", file.name, file.type);
           }
       });
       
       if (files.length > 0) {
         onFileSelect(files);
       } else {
-        alert("Vui lòng chỉ tải lên file video.");
+        alert("Không tìm thấy file video hợp lệ. Vui lòng tải lên file .MP4, .MOV, .WebM.");
       }
     }
   }, [onFileSelect]);
@@ -47,7 +63,11 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
     e.preventDefault();
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files);
-      onFileSelect(files);
+      // Input native filter đã lọc rồi, nhưng check lại cho chắc
+      const validFiles = files.filter(isValidVideoFile);
+      if (validFiles.length > 0) {
+          onFileSelect(validFiles);
+      }
     }
   };
 
@@ -93,7 +113,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
         onDragOver={handleDrag}
         onDrop={handleDrop}
       >
-        <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center">
+        <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center pointer-events-none">
             {isLoading ? (
                 <div className="flex flex-col items-center">
                      <div className="relative">
@@ -119,8 +139,8 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({ onFileSelect, onUr
             type="file" 
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
             onChange={handleChange}
-            accept="video/*"
-            multiple // CHO PHÉP CHỌN NHIỀU FILE
+            accept="video/*, .mp4, .mov, .webm, .mkv, .avi"
+            multiple 
             disabled={isLoading}
         />
       </div>
