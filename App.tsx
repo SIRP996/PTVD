@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { VideoUploader } from './components/VideoUploader';
 import { ScriptViewer } from './components/ScriptViewer';
 import { ScriptLibrary } from './components/ScriptLibrary';
-import { Auth, User } from './components/Auth';
+import { Auth } from './components/Auth';
 import { ScriptAnalysis, AnalysisStatus } from './types';
 import { analyzeVideoFile, analyzeVideoUrl, optimizeScriptWithAI } from './services/geminiService';
 import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb } from './services/firebaseService';
+import { auth } from './firebaseConfig';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -19,20 +21,20 @@ const App: React.FC = () => {
   const [processingState, setProcessingState] = useState<{current: number, total: number} | undefined>(undefined);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Monitor Auth State (Mock Implementation)
+  // Monitor Real Firebase Auth State
   useEffect(() => {
-    const storedUser = localStorage.getItem('tiktok_app_user');
-    if (storedUser) {
-        try {
-            setUser(JSON.parse(storedUser));
-        } catch (e) {
-            console.error("Failed to parse stored user", e);
-        }
+    if (!auth) {
+        setLoadingAuth(false);
+        return;
     }
-    setLoadingAuth(false);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        setUser(currentUser);
+        setLoadingAuth(false);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Load scripts when user logs in
+  // Load scripts when user logs in (Real Firestore Fetch)
   useEffect(() => {
     if (user) {
         const loadScripts = async () => {
@@ -42,7 +44,7 @@ const App: React.FC = () => {
                 setSavedScripts(scripts);
             } catch (error) {
                 console.error("Failed to load scripts", error);
-                showNotification("Lỗi tải dữ liệu. Đang dùng bộ nhớ tạm.");
+                showNotification("Lỗi tải dữ liệu từ Cloud.");
             } finally {
                 setIsSyncing(false);
             }
@@ -55,15 +57,10 @@ const App: React.FC = () => {
   }, [user]);
 
   const handleLogout = async () => {
-      localStorage.removeItem('tiktok_app_user');
-      setUser(null);
-      showNotification("Đã đăng xuất.");
-  };
-
-  const handleLoginSuccess = (user: User) => {
-      localStorage.setItem('tiktok_app_user', JSON.stringify(user));
-      setUser(user);
-      showNotification("Đăng nhập thành công!");
+      if (auth) {
+        await signOut(auth);
+        showNotification("Đã đăng xuất.");
+      }
   };
 
   const showNotification = (msg: string) => {
@@ -90,7 +87,7 @@ const App: React.FC = () => {
             
             const newScript: ScriptAnalysis = {
                 id: `script-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                userId: user.uid, // Gán user ID
+                userId: user.uid, // Gán user ID thật
                 title: result.title || file.name,
                 videoName: file.name,
                 createdAt: Date.now(),
@@ -98,7 +95,7 @@ const App: React.FC = () => {
                 scenes: result.scenes || []
             };
 
-            // Save to Firebase (Mocked to LocalStorage)
+            // Save to Real Firestore
             await saveScriptToDb(newScript);
 
             // Update local state
@@ -127,7 +124,7 @@ const App: React.FC = () => {
         
         const newScript: ScriptAnalysis = {
             id: `script-${Date.now()}`,
-            userId: user.uid, // Gán user ID
+            userId: user.uid,
             title: result.title || "URL Analysis",
             videoName: url,
             createdAt: Date.now(),
@@ -135,13 +132,12 @@ const App: React.FC = () => {
             scenes: result.scenes || []
         };
 
-        // Save to Firebase (Mocked to LocalStorage)
         await saveScriptToDb(newScript);
 
         setCurrentScript(newScript);
         setSavedScripts(prev => [newScript, ...prev]);
         setStatus(AnalysisStatus.COMPLETE);
-        showNotification("Đã lưu kịch bản vào hệ thống!");
+        showNotification("Đã lưu kịch bản vào Cloud!");
     } catch (error: any) {
         console.error(error);
         setStatus(AnalysisStatus.ERROR);
@@ -208,13 +204,12 @@ const App: React.FC = () => {
             scenes: optimizedScenes
         };
         
-        // Update Firebase (Mocked)
         await saveScriptToDb(updatedScript);
 
         setCurrentScript(updatedScript);
         setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
         
-        showNotification("Đã tối ưu và lưu vào Cloud!");
+        showNotification("Đã tối ưu và cập nhật Cloud!");
         setStatus(AnalysisStatus.COMPLETE);
     } catch (e) {
         setStatus(AnalysisStatus.ERROR);
@@ -226,11 +221,9 @@ const App: React.FC = () => {
       if (currentScript) {
           const updatedScript = { ...currentScript, tags: newTags };
           
-          // Optimistic UI update
           setCurrentScript(updatedScript);
           setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
 
-          // Save to Firebase (Mocked)
           try {
             await saveScriptToDb(updatedScript);
           } catch (e) {
@@ -240,7 +233,7 @@ const App: React.FC = () => {
   };
 
   const deleteScript = async (id: string) => {
-      if(!window.confirm("Bạn có chắc muốn xóa kịch bản này vĩnh viễn?")) return;
+      if(!window.confirm("Bạn có chắc muốn xóa kịch bản này vĩnh viễn trên Cloud?")) return;
 
       try {
           await deleteScriptFromDb(id);
@@ -265,7 +258,7 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-      return <Auth onLoginSuccess={handleLoginSuccess} />;
+      return <Auth onLoginSuccess={() => {}} />;
   }
 
   return (
@@ -280,7 +273,7 @@ const App: React.FC = () => {
                     <Layout className="w-6 h-6" />
                 </div>
                 <span className="font-bold text-xl tracking-tight text-gray-900 hidden sm:block">TikTok Script Architect</span>
-                {isSyncing && <span className="text-xs text-gray-400 flex items-center gap-1 ml-2"><Cloud className="w-3 h-3 animate-bounce"/> Loading...</span>}
+                {isSyncing && <span className="text-xs text-gray-400 flex items-center gap-1 ml-2"><Cloud className="w-3 h-3 animate-bounce"/> Đồng bộ...</span>}
             </div>
             
             <div className="flex items-center gap-4">
@@ -342,7 +335,7 @@ const App: React.FC = () => {
                         Biến Video thành <span className="text-blue-600">Kịch bản chi tiết</span>
                     </h1>
                     <p className="text-lg text-gray-500">
-                        Kéo thả hàng loạt video. AI phân tích tự động. Lưu trữ đám mây (Demo Mode).
+                        Kéo thả hàng loạt video. AI phân tích tự động. Lưu trữ Cloud Realtime.
                     </p>
                 </div>
                 <VideoUploader 
@@ -356,7 +349,7 @@ const App: React.FC = () => {
                     <div className="mt-12 w-full max-w-4xl">
                         <div className="flex items-center gap-2 mb-4 text-gray-500 font-medium">
                             <Layout className="w-4 h-4" />
-                            <span>Kịch bản gần đây của bạn</span>
+                            <span>Kịch bản gần đây trên Cloud</span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {savedScripts.slice(0, 3).map(script => (
