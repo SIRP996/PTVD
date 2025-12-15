@@ -1,45 +1,19 @@
-import React, { useCallback, useState, useEffect } from 'react';
-import { UploadCloud, Link as LinkIcon, AlertCircle, Layers, Timer, Terminal, Video as VideoIcon } from 'lucide-react';
+import React, { useCallback, useState } from 'react';
+import { UploadCloud, Link as LinkIcon, AlertCircle } from 'lucide-react';
 
 interface VideoUploaderProps {
   onFileSelect: (files: File[]) => void;
   onUrlSubmit: (url: string) => void;
   isLoading: boolean;
-  processingCount?: { current: number; total: number };
-  elapsedTime?: number;
-  loadingMessage?: string;
-  currentProcessingItem?: File | string | null; // Prop mới
 }
 
 export const VideoUploader: React.FC<VideoUploaderProps> = ({ 
     onFileSelect, 
     onUrlSubmit, 
-    isLoading, 
-    processingCount, 
-    elapsedTime = 0,
-    loadingMessage = '',
-    currentProcessingItem
+    isLoading
 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [urlInput, setUrlInput] = useState('');
-  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
-
-  // Tạo URL preview cho video file
-  useEffect(() => {
-    if (currentProcessingItem instanceof File) {
-        const url = URL.createObjectURL(currentProcessingItem);
-        setVideoPreviewUrl(url);
-        return () => URL.revokeObjectURL(url);
-    } else {
-        setVideoPreviewUrl(null);
-    }
-  }, [currentProcessingItem]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -84,7 +58,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
       } else {
           alert("Bạn đã chọn file không phải video.");
       }
-      e.target.value = '';
+      e.target.value = ''; // Reset input
     }
   };
 
@@ -94,6 +68,10 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
       onUrlSubmit(urlInput);
     }
   };
+
+  // Nếu đang loading mà không hiển thị ở đây (do App.tsx đã hiển thị Overlay),
+  // component này có thể bị ẩn hoặc disable.
+  // Ở đây ta chỉ disable inputs.
 
   return (
     <div className="w-full max-w-4xl mx-auto mb-8 space-y-4">
@@ -107,7 +85,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
             <input
                 type="text"
                 placeholder="Dán link TikTok (vd: https://vt.tiktok.com/...) hoặc link MP4..."
-                className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm shadow-sm"
+                className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm shadow-sm disabled:bg-gray-50 disabled:text-gray-400"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 disabled={isLoading}
@@ -124,74 +102,18 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
 
       {/* Drag & Drop Area */}
       <div 
-        className={`relative flex flex-col items-center justify-center w-full min-h-[12rem] border-2 border-dashed rounded-xl transition-colors duration-200 ease-in-out ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+        className={`relative flex flex-col items-center justify-center w-full min-h-[12rem] border-2 border-dashed rounded-xl transition-colors duration-200 ease-in-out ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'} ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
       >
         <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center w-full px-4">
-            {isLoading ? (
-                <div className="flex flex-col items-center w-full gap-4">
-                     
-                     {/* VIDEO PREVIEW SECTION */}
-                     <div className="relative group">
-                         {videoPreviewUrl ? (
-                             <div className="relative w-32 h-32 rounded-lg overflow-hidden border-2 border-blue-200 shadow-md">
-                                 <video 
-                                    src={videoPreviewUrl} 
-                                    className="w-full h-full object-cover" 
-                                    autoPlay 
-                                    muted 
-                                    loop 
-                                    playsInline 
-                                 />
-                                 <div className="absolute inset-0 bg-black/10 flex items-center justify-center">
-                                     <div className="w-8 h-8 border-2 border-white/50 border-t-white rounded-full animate-spin"></div>
-                                 </div>
-                             </div>
-                         ) : currentProcessingItem && typeof currentProcessingItem === 'string' ? (
-                             <div className="w-24 h-24 rounded-lg bg-gray-100 flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
-                                 <LinkIcon className="w-8 h-8 text-gray-400 mb-2" />
-                                 <span className="text-[10px] text-gray-500 max-w-[80px] truncate px-1">URL Processing</span>
-                             </div>
-                         ) : (
-                             <div className="relative">
-                                <div className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></div>
-                                <Layers className="relative w-12 h-12 text-blue-500" />
-                             </div>
-                         )}
-                     </div>
-
-                     <div className="flex flex-col items-center">
-                        <p className="text-lg text-blue-600 font-bold animate-pulse">
-                            {processingCount ? `Đang xử lý ${processingCount.current} / ${processingCount.total} video` : 'Đang phân tích...'}
-                        </p>
-                        {currentProcessingItem instanceof File && <p className="text-xs text-gray-400 mt-1">{currentProcessingItem.name}</p>}
-                     </div>
-                     
-                     {/* Timer Display */}
-                     <div className="flex items-center gap-2 text-amber-700 bg-amber-100 px-4 py-1.5 rounded-full text-sm font-bold border border-amber-300 shadow-sm animate-pulse">
-                        <Timer className="w-4 h-4" />
-                        <span>Thời gian: {formatTime(elapsedTime)}</span>
-                     </div>
-                     
-                     {/* LOG DISPLAY AREA */}
-                     <div className="flex items-center gap-2 text-sm text-gray-500 font-mono bg-gray-50 px-3 py-1 rounded border border-gray-100 max-w-md w-full justify-center truncate">
-                        <Terminal className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                        <span className="truncate">{loadingMessage || 'Đang khởi tạo...'}</span>
-                     </div>
-
-                </div>
-            ) : (
-                <>
-                    <UploadCloud className="w-12 h-12 text-gray-400 mb-3" />
-                    <p className="mb-2 text-sm text-gray-500">
-                        <span className="font-semibold text-blue-600">Click để chọn nhiều file</span> hoặc kéo thả vào đây
-                    </p>
-                    <p className="text-xs text-gray-400">Hỗ trợ MP4, WebM, MOV.</p>
-                </>
-            )}
+            <UploadCloud className="w-12 h-12 text-gray-400 mb-3" />
+            <p className="mb-2 text-sm text-gray-500">
+                <span className="font-semibold text-blue-600">Click để chọn nhiều file</span> hoặc kéo thả vào đây
+            </p>
+            <p className="text-xs text-gray-400">Hỗ trợ MP4, WebM, MOV.</p>
         </div>
         <input 
             type="file" 

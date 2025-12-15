@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { VideoUploader } from './components/VideoUploader';
 import { ScriptViewer } from './components/ScriptViewer';
 import { ScriptLibrary } from './components/ScriptLibrary';
+import { ProcessingOverlay } from './components/ProcessingOverlay'; // Import mới
 import { Auth } from './components/Auth';
 import { ScriptAnalysis, AnalysisStatus } from './types';
 import { analyzeVideoFile, analyzeVideoUrl, optimizeScriptWithAI } from './services/geminiService';
 import { saveScriptToDb, fetchScriptsFromDb, deleteScriptFromDb, migrateGuestDataToUser } from './services/firebaseService';
 import { auth } from './firebaseConfig';
-import firebase from 'firebase/compat/app'; // Updated to compat import
-import { Save, Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, Cloud, LogOut, User as UserIcon, AlertTriangle, Timer, WifiOff, RefreshCw } from 'lucide-react';
+import firebase from 'firebase/compat/app';
+import { Copy, Sparkles, Layout, Plus, CheckCircle, FileSpreadsheet, LogOut, User as UserIcon, AlertTriangle, Timer, WifiOff, RefreshCw } from 'lucide-react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<firebase.User | null>(null);
@@ -18,10 +19,10 @@ const App: React.FC = () => {
   const [savedScripts, setSavedScripts] = useState<ScriptAnalysis[]>([]);
   const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
   const [notification, setNotification] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
+  
+  // State quản lý tiến trình
   const [processingState, setProcessingState] = useState<{current: number, total: number} | undefined>(undefined);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
-  
-  // State mới để theo dõi item đang xử lý (File hoặc URL string)
   const [processingItem, setProcessingItem] = useState<File | string | null>(null);
   
   const [isSyncing, setIsSyncing] = useState(false);
@@ -32,10 +33,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (status === AnalysisStatus.ANALYZING || status === AnalysisStatus.OPTIMIZING) {
-          setTimer(0);
-          timerIntervalRef.current = window.setInterval(() => {
-              setTimer(prev => prev + 1);
-          }, 1000);
+          // Chỉ reset timer về 0 khi bắt đầu chu trình mới, không reset giữa các file
+          // Logic này xử lý ở handleFileSelect
+          if (!timerIntervalRef.current) {
+            timerIntervalRef.current = window.setInterval(() => {
+                setTimer(prev => prev + 1);
+            }, 1000);
+          }
       } else {
           if (timerIntervalRef.current) {
               clearInterval(timerIntervalRef.current);
@@ -47,14 +51,13 @@ const App: React.FC = () => {
       };
   }, [status]);
 
-  // Format Timer
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Monitor Real Firebase Auth State
+  // Auth logic
   useEffect(() => {
     if (!auth) {
         setLoadingAuth(false);
@@ -63,23 +66,19 @@ const App: React.FC = () => {
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
         if (currentUser) {
            setUser(currentUser);
-           // --- AUTO MIGRATE GUEST DATA ---
-           // Khi người dùng đăng nhập thật, kiểm tra xem có dữ liệu Guest cũ không và sync lên
            try {
                const migratedCount = await migrateGuestDataToUser(currentUser.uid);
                if (migratedCount > 0) {
-                   showNotification(`Đã đồng bộ ${migratedCount} kịch bản cũ lên tài khoản của bạn!`, 'success');
+                   showNotification(`Đã đồng bộ ${migratedCount} kịch bản cũ!`, 'success');
                }
-           } catch (e) {
-               console.error("Migration failed", e);
-           }
+           } catch (e) { console.error(e); }
         } else if (user?.uid !== 'guest') {
            setUser(null);
         }
         setLoadingAuth(false);
     });
     return () => unsubscribe();
-  }, []); // Remove user dependency to avoid loop
+  }, []);
 
   // Load scripts
   useEffect(() => {
@@ -89,12 +88,8 @@ const App: React.FC = () => {
             try {
                 const scripts = await fetchScriptsFromDb(user.uid);
                 setSavedScripts(scripts);
-            } catch (error) {
-                console.error("Failed to load scripts", error);
-                // Không hiển thị lỗi quá gắt, chỉ log
-            } finally {
-                setIsSyncing(false);
-            }
+            } catch (error) { console.error(error); } 
+            finally { setIsSyncing(false); }
         };
         loadScripts();
     } else {
@@ -106,17 +101,12 @@ const App: React.FC = () => {
   const handleLogout = async () => {
       if (user?.uid === 'guest') {
           setUser(null);
-          showNotification("Đã thoát chế độ khách.", 'success');
           return;
       }
-      if (auth) {
-        await auth.signOut();
-        showNotification("Đã đăng xuất.", 'success');
-      }
+      if (auth) await auth.signOut();
   };
 
   const handleGuestLogin = () => {
-      // Create a fake user object for Guest
       const guestUser = {
           uid: 'guest',
           displayName: 'Khách (Guest)',
@@ -126,9 +116,7 @@ const App: React.FC = () => {
           photoURL: null,
           providerData: []
       } as unknown as firebase.User;
-      
       setUser(guestUser);
-      showNotification("Đã vào Chế độ Khách (Lưu trữ trên máy).", 'success');
   };
 
   const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -136,31 +124,21 @@ const App: React.FC = () => {
       setTimeout(() => setNotification(null), 5000); 
   }
 
-  // --- HÀM LƯU DB RIÊNG BIỆT ---
   const saveToCloudSafe = async (script: ScriptAnalysis) => {
       try {
-          // Chỉ hiện loading message nếu đang ở trang upload đơn
-          if (status !== AnalysisStatus.ANALYZING) setLoadingMessage("Đang đồng bộ Cloud...");
-          
           await saveScriptToDb(script);
-          // Không spam notification nếu đang chạy batch
-          if (!processingState) {
-              showNotification("Đã lưu thành công!", 'success');
-          }
       } catch (dbError: any) {
           console.error("FIREBASE SAVE ERROR:", dbError);
-          let msg = "Lỗi lưu trữ (Kiểm tra mạng).";
-          if (dbError.code === 'permission-denied') msg += " (Thiếu quyền truy cập)";
-          showNotification(msg, 'error');
+          showNotification("Lỗi lưu trữ (Kiểm tra mạng).", 'error');
       }
   };
 
-  // BATCH PROCESSING LOGIC
+  // --- BATCH PROCESSING LOGIC ĐƯỢC CẬP NHẬT ---
   const handleFileSelect = async (files: File[]) => {
     if (files.length === 0 || !user) return;
 
     setStatus(AnalysisStatus.ANALYZING);
-    setLoadingMessage("Đang chuẩn bị...");
+    setTimer(0); // Reset timer
     setProcessingState({ current: 0, total: files.length });
     
     let successCount = 0;
@@ -168,10 +146,14 @@ const App: React.FC = () => {
     // Process sequentially
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        
+        // CẬP NHẬT STATE CHO TỪNG FILE
         setProcessingState({ current: i + 1, total: files.length });
-        setProcessingItem(file); // Cập nhật file đang xử lý để hiển thị preview
+        setProcessingItem(file); // Quan trọng: Cập nhật file đang xử lý để Overlay hiển thị
+        setLoadingMessage(`Đang tải video ${i+1}...`);
         
         try {
+            // Phân tích
             const result = await analyzeVideoFile(file, (msg) => setLoadingMessage(msg));
             
             const newScript: ScriptAnalysis = {
@@ -184,50 +166,55 @@ const App: React.FC = () => {
                 scenes: result.scenes || []
             };
 
-            // UX FIX: 
-            // - Nếu là video đầu tiên: Hiển thị ngay lên màn hình chính.
-            // - Nếu là video thứ 2, 3...: Chỉ thêm vào list bên phải, KHÔNG thay đổi màn hình chính để tránh làm phiền người dùng đang đọc.
+            // LƯU DB NGAY LẬP TỨC
+            await saveToCloudSafe(newScript);
+
+            // Cập nhật danh sách kịch bản
+            setSavedScripts(prev => [newScript, ...prev]);
+
+            // LOGIC HIỂN THỊ:
+            // Nếu đây là file đầu tiên, hiển thị ngay kịch bản cho người dùng xem.
+            // Các file sau sẽ chạy ngầm (hiển thị qua ProcessingOverlay dạng widget).
             if (i === 0) {
                 setCurrentScript(newScript);
             } else {
                 showNotification(`Đã xong "${file.name}" (Xem ở cột phải)`, 'success');
             }
             
-            setSavedScripts(prev => [newScript, ...prev]);
             successCount++;
-
-            // 2. LƯU SAU (KHÔNG CHẶN HIỂN THỊ)
-            await saveToCloudSafe(newScript);
 
         } catch (error: any) {
             console.error(`Error processing file ${file.name}:`, error);
             showNotification(`Lỗi phân tích ${file.name}: ${error.message}`, 'error');
-            // Nếu lỗi, chờ xíu rồi qua file tiếp theo
-            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        // Delay nhỏ giữa các file để UI kịp render và tránh rate limit
+        if (i < files.length - 1) {
+            setLoadingMessage("Đang chuẩn bị video tiếp theo...");
+            await new Promise(r => setTimeout(r, 1500));
         }
     }
 
+    // Kết thúc batch
     setProcessingState(undefined);
-    setProcessingItem(null); // Clear item
+    setProcessingItem(null);
     setStatus(AnalysisStatus.COMPLETE);
     setLoadingMessage('');
     
     if (successCount > 0) {
         showNotification(`Hoàn tất ${successCount}/${files.length} video!`, 'success');
-    } else {
-        showNotification("Không thể xử lý video nào.", 'error');
     }
   };
 
   const handleUrlSubmit = async (url: string) => {
     if (!user) return;
     setStatus(AnalysisStatus.ANALYZING);
-    setLoadingMessage("Đang khởi tạo kết nối...");
-    setProcessingItem(url); // Cập nhật URL đang xử lý
+    setTimer(0);
+    setProcessingState({ current: 1, total: 1 });
+    setProcessingItem(url);
     
     try {
         const result = await analyzeVideoUrl(url, (msg) => setLoadingMessage(msg));
-        
         const newScript: ScriptAnalysis = {
             id: `script-${Date.now()}`,
             userId: user.uid,
@@ -238,22 +225,18 @@ const App: React.FC = () => {
             scenes: result.scenes || []
         };
 
-        // 1. HIỂN THỊ NGAY
-        setCurrentScript(newScript);
-        setSavedScripts(prev => [newScript, ...prev]);
-        setStatus(AnalysisStatus.COMPLETE);
-        setLoadingMessage('');
-
-        // 2. LƯU SAU
         await saveToCloudSafe(newScript);
+        setSavedScripts(prev => [newScript, ...prev]);
+        setCurrentScript(newScript);
+        setStatus(AnalysisStatus.COMPLETE);
 
     } catch (error: any) {
-        console.error(error);
         setStatus(AnalysisStatus.ERROR);
-        setLoadingMessage(`Lỗi: ${error.message}`);
         showNotification(error.message || "Lỗi khi phân tích URL.", 'error');
     } finally {
-        setProcessingItem(null); // Clear item
+        setProcessingItem(null);
+        setProcessingState(undefined);
+        setStatus(AnalysisStatus.IDLE);
     }
   };
 
@@ -270,34 +253,16 @@ const App: React.FC = () => {
             clean(scene.audioScript)
         ].join("\t");
     });
-    const tsvContent = headers.join("\t") + "\n" + rows.join("\n");
-    navigator.clipboard.writeText(tsvContent);
-    showNotification("Đã copy dữ liệu dạng bảng!", 'success');
+    navigator.clipboard.writeText(headers.join("\t") + "\n" + rows.join("\n"));
+    showNotification("Đã copy dữ liệu!", 'success');
   };
 
   const handleOpenGoogleSheets = () => {
-    if (!currentScript) return;
-    const headers = ["Sản phẩm", "Phân cảnh", "Mô tả hình ảnh", "Kịch bản phát ngôn"];
-    const rows = currentScript.scenes.map((scene) => {
-        const clean = (text: string) => (text || '').replace(/[\t\n\r]+/g, ' ').trim();
-        const productCol = currentScript.tags.length > 0 ? currentScript.tags.join(", ") : "";
-        return [
-            clean(productCol),
-            clean(`${scene.type} (${scene.startTime} - ${scene.endTime})`),
-            clean(scene.visualDescription),
-            clean(scene.audioScript)
-        ].join("\t");
-    });
-    const tsvContent = headers.join("\t") + "\n" + rows.join("\n");
-    navigator.clipboard.writeText(tsvContent)
-      .then(() => {
-          window.open("https://sheets.new", "_blank");
-          showNotification("Đã copy! Nhấn Ctrl+V vào Google Sheet.", 'success');
-      })
-      .catch((err) => {
-          console.error('Could not copy text: ', err);
-          showNotification("Lỗi copy clipboard.", 'error');
-      });
+    handleCopyScript();
+    setTimeout(() => {
+        window.open("https://sheets.new", "_blank");
+        showNotification("Đã copy! Nhấn Ctrl+V vào Google Sheet.", 'success');
+    }, 500);
   };
 
   const handleOptimize = async () => {
@@ -305,18 +270,12 @@ const App: React.FC = () => {
     setStatus(AnalysisStatus.OPTIMIZING);
     try {
         const optimizedScenes = await optimizeScriptWithAI(currentScript);
-        const updatedScript = {
-            ...currentScript,
-            scenes: optimizedScenes
-        };
+        const updatedScript = { ...currentScript, scenes: optimizedScenes };
         
-        // Update UI trước
         setCurrentScript(updatedScript);
         setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-        setStatus(AnalysisStatus.COMPLETE);
-
-        // Lưu sau
         await saveToCloudSafe(updatedScript);
+        setStatus(AnalysisStatus.COMPLETE);
     } catch (e) {
         setStatus(AnalysisStatus.ERROR);
         showNotification("Lỗi khi tối ưu hóa.", 'error');
@@ -328,11 +287,7 @@ const App: React.FC = () => {
           const updatedScript = { ...currentScript, tags: newTags };
           setCurrentScript(updatedScript);
           setSavedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-          try {
-            await saveScriptToDb(updatedScript);
-          } catch (e) {
-            showNotification("Lỗi lưu tag lên Cloud (Kiểm tra kết nối/Quyền)!", 'error');
-          }
+          saveToCloudSafe(updatedScript);
       }
   };
 
@@ -341,18 +296,14 @@ const App: React.FC = () => {
       if (!user) return;
 
       try {
-          await deleteScriptFromDb(id, user.uid); // Pass user.uid to support Guest Mode delete
+          await deleteScriptFromDb(id, user.uid);
           setSavedScripts(savedScripts.filter(s => s.id !== id));
-          if (currentScript?.id === id) {
-              setCurrentScript(null);
-          }
+          if (currentScript?.id === id) setCurrentScript(null);
           showNotification("Đã xóa kịch bản.", 'success');
       } catch (e) {
           showNotification("Lỗi khi xóa kịch bản.", 'error');
       }
   };
-
-  // --- RENDERING ---
 
   if (loadingAuth) {
       return (
@@ -369,8 +320,18 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
       
+      {/* PROCESSING OVERLAY: Hiển thị ở đây để luôn tồn tại dù View bên dưới thay đổi */}
+      <ProcessingOverlay 
+        status={status}
+        processingItem={processingItem}
+        processingState={processingState}
+        message={loadingMessage}
+        elapsedTime={timer}
+        isMinimized={!!currentScript} // Nếu đã có kịch bản hiển thị -> Thu nhỏ Widget
+      />
+
       {/* Navbar */}
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <nav className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-2">
@@ -394,11 +355,7 @@ const App: React.FC = () => {
                             <UserIcon className="w-4 h-4" />
                         </div>
                     )}
-                    <button 
-                        onClick={handleLogout}
-                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Đăng xuất"
-                    >
+                    <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                         <LogOut className="w-5 h-5" />
                     </button>
                 </div>
@@ -407,12 +364,12 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      {/* Sub-nav for actions */}
+      {/* Sub-nav */}
       {currentScript && (
           <div className="bg-white border-b border-gray-200 shadow-sm py-2">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
                  <button 
-                    onClick={() => { setCurrentScript(null); setStatus(AnalysisStatus.IDLE); setLoadingMessage(''); }}
+                    onClick={() => { setCurrentScript(null); setStatus(AnalysisStatus.IDLE); }}
                     className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-600 transition-colors"
                 >
                     <Plus className="w-4 h-4" />
@@ -422,7 +379,7 @@ const App: React.FC = () => {
           </div>
       )}
 
-      <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 relative">
         
         {notification && (
             <div className={`fixed top-20 right-8 z-50 px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-fade-in-down border ${notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-gray-800 text-white border-gray-700'}`}>
@@ -431,28 +388,32 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {/* Input Area (Only show if no script selected or idle) */}
+        {/* --- TRƯỜNG HỢP 1: CHƯA CÓ KỊCH BẢN NÀO ĐƯỢC CHỌN (TRANG CHỦ) --- */}
         {!currentScript && (
              <div className="flex flex-col items-center justify-center min-h-[60vh]">
-                <div className="text-center mb-10 max-w-2xl">
-                    <h1 className="text-4xl font-extrabold text-gray-900 mb-4 sm:text-5xl">
-                        Biến Video thành <span className="text-blue-600">Kịch bản chi tiết</span>
-                    </h1>
-                    <p className="text-lg text-gray-500">
-                        Kéo thả hàng loạt video. AI phân tích tự động. Lưu trữ Cloud Realtime.
-                    </p>
-                </div>
-                <VideoUploader 
-                    onFileSelect={handleFileSelect} 
-                    onUrlSubmit={handleUrlSubmit}
-                    isLoading={status === AnalysisStatus.ANALYZING} 
-                    processingCount={processingState}
-                    elapsedTime={timer}
-                    loadingMessage={loadingMessage} 
-                    currentProcessingItem={processingItem} // Pass prop mới
-                />
+                {/* Chỉ hiển thị Intro Text nếu KHÔNG đang xử lý (vì nếu đang xử lý, Overlay to sẽ đè lên) */}
+                {status !== AnalysisStatus.ANALYZING && (
+                    <div className="text-center mb-10 max-w-2xl">
+                        <h1 className="text-4xl font-extrabold text-gray-900 mb-4 sm:text-5xl">
+                            Biến Video thành <span className="text-blue-600">Kịch bản chi tiết</span>
+                        </h1>
+                        <p className="text-lg text-gray-500">
+                            Kéo thả hàng loạt video. AI phân tích tự động. Lưu trữ Cloud Realtime.
+                        </p>
+                    </div>
+                )}
                 
-                {savedScripts.length > 0 && (
+                {/* Nếu đang xử lý (Overlay Full Mode) -> Ẩn Uploader để tránh rối mắt */}
+                {status !== AnalysisStatus.ANALYZING && (
+                    <VideoUploader 
+                        onFileSelect={handleFileSelect} 
+                        onUrlSubmit={handleUrlSubmit}
+                        isLoading={false}
+                    />
+                )}
+                
+                {/* Danh sách kịch bản gần đây */}
+                {savedScripts.length > 0 && status !== AnalysisStatus.ANALYZING && (
                     <div className="mt-12 w-full max-w-4xl">
                         <div className="flex items-center gap-2 mb-4 text-gray-500 font-medium">
                             <Layout className="w-4 h-4" />
@@ -476,41 +437,31 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {/* Main Workspace */}
+        {/* --- TRƯỜNG HỢP 2: ĐANG XEM KỊCH BẢN (GIAO DIỆN CHÍNH) --- */}
         {currentScript && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 <div className="lg:col-span-9 space-y-6">
                     {/* Action Bar */}
                     <div className="flex flex-wrap items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-sm gap-4">
                         <div className="flex items-center gap-3">
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 ${status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? 'bg-yellow-100 text-yellow-800 animate-pulse' : 'bg-green-100 text-green-800'}`}>
-                                {status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING ? <Timer className="w-3 h-3"/> : null}
-                                {status === AnalysisStatus.OPTIMIZING ? `Đang tối ưu AI (${formatTime(timer)})...` : 
-                                 status === AnalysisStatus.ANALYZING ? `Đang xử lý... (${formatTime(timer)})` : 'Sẵn sàng'}
-                            </span>
+                           <h2 className="text-lg font-bold text-gray-800 truncate max-w-[200px] sm:max-w-md" title={currentScript.title}>
+                               {currentScript.title}
+                           </h2>
                         </div>
                         <div className="flex flex-wrap gap-2">
                             <button 
                                 onClick={handleOptimize}
-                                disabled={status === AnalysisStatus.OPTIMIZING || status === AnalysisStatus.ANALYZING}
-                                className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 font-medium transition-colors border border-purple-100"
+                                disabled={status === AnalysisStatus.OPTIMIZING}
+                                className="flex items-center gap-2 px-3 py-2 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 text-sm font-medium transition-colors border border-purple-100"
                             >
                                 <Sparkles className="w-4 h-4" />
-                                Tối ưu AI
+                                {status === AnalysisStatus.OPTIMIZING ? 'Đang viết lại...' : 'Tối ưu AI'}
                             </button>
-                            <button 
-                                onClick={handleCopyScript}
-                                className="flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 font-medium transition-colors border border-gray-200"
-                            >
-                                <Copy className="w-4 h-4" />
-                                Copy
+                            <button onClick={handleCopyScript} className="flex items-center gap-2 px-3 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 text-sm font-medium transition-colors border border-gray-200">
+                                <Copy className="w-4 h-4" /> Copy
                             </button>
-                            <button 
-                                onClick={handleOpenGoogleSheets}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium shadow-sm shadow-green-200 transition-colors"
-                            >
-                                <FileSpreadsheet className="w-4 h-4" />
-                                Sheet
+                            <button onClick={handleOpenGoogleSheets} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium shadow-sm transition-colors">
+                                <FileSpreadsheet className="w-4 h-4" /> Sheet
                             </button>
                         </div>
                     </div>
